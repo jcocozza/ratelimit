@@ -1,4 +1,4 @@
-package fixedwindow
+package ratelimit
 
 import (
 	"context"
