@@ -57,6 +57,20 @@ func (fw *FixedWindow) timeUntilMakeRequest() time.Duration {
 	return f
 }
 
+// return the number of requests left in the window
+func (fw *FixedWindow) RequestsRemaining() int {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	return fw.MaxRequests - fw.count
+}
+
+// Return the duration until the window will reset
+func (fw *FixedWindow) TimeTillNextWindow() time.Duration {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	return time.Until(fw.resetAt)
+}
+
 // make a request
 //
 // will return an error if the limit has been reached
