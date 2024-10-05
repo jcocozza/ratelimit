@@ -23,6 +23,7 @@ func NewFixedWindow(interval time.Duration, maxRequests int) *FixedWindow {
 	}
 }
 
+// mostly for debugging
 func (fw *FixedWindow) String() string {
 	return fmt.Sprintf("Max Requests: %d, Interval: %s", fw.MaxRequests, fw.Interval.String())
 }
@@ -61,6 +62,7 @@ func (fw *FixedWindow) timeUntilMakeRequest() time.Duration {
 func (fw *FixedWindow) RequestsRemaining() int {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
+	fw.checkAndDoReset()
 	return fw.MaxRequests - fw.count
 }
 
