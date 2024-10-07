@@ -25,37 +25,25 @@ func NewFixedWindow(interval time.Duration, maxRequests int) *FixedWindow {
 
 // mostly for debugging
 func (fw *FixedWindow) String() string {
-	return fmt.Sprintf("Max Requests: %d, Interval: %s", fw.MaxRequests, fw.Interval.String())
-}
-
-func (fw *FixedWindow) needReset() bool {
-	return time.Now().After(fw.resetAt)
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	return fmt.Sprintf("[Max Requests: %d, Interval: %s] %d", fw.MaxRequests, fw.Interval.String(), fw.count)
 }
 
 func (fw *FixedWindow) resetCount() {
+	now := time.Now()
 	fw.count = 0
-	for !fw.resetAt.After(time.Now()) {
-		fw.resetAt = fw.resetAt.Add(fw.Interval)
-	}
+	fw.resetAt = now.Add(fw.Interval)
 }
 
 func (fw *FixedWindow) checkAndDoReset() {
-	if fw.needReset() {
+	if time.Now().After(fw.resetAt) {
 		fw.resetCount()
 	}
 }
 
 func (fw *FixedWindow) limitReached() bool {
 	return fw.count >= fw.MaxRequests
-}
-
-func (fw *FixedWindow) timeUntilMakeRequest() time.Duration {
-	fw.checkAndDoReset()
-	if !fw.limitReached() {
-		return 0
-	}
-	f := time.Until(fw.resetAt)
-	return f
 }
 
 // return the number of requests left in the window
@@ -76,10 +64,14 @@ func (fw *FixedWindow) TimeTillNextWindow() time.Duration {
 // make a request
 //
 // will return an error if the limit has been reached
-func (fw *FixedWindow) Request() error {
+func (fw *FixedWindow) Request(opts ...RequestOption) error {
+	options := createOptions(opts)
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 	fw.checkAndDoReset()
+	if options.throttleLimit != nil && fw.count >= *options.throttleLimit {
+		return fmt.Errorf("throttle limit: %d has been reached for this window", options.throttleLimit)
+	}
 	if fw.limitReached() {
 		return fmt.Errorf("limit: %d has been reached for this window", fw.MaxRequests)
 	}
@@ -90,24 +82,34 @@ func (fw *FixedWindow) Request() error {
 // make a request
 //
 // will wait until the request can be completed, or the context times out.
-func (fw *FixedWindow) WaitRequest(ctx context.Context) error {
-	fw.mu.Lock()
-	defer fw.mu.Unlock()
-	// becuase selects are non-deterministic, we need to manually check if the context is done on arrival
-	if ctx.Err() != nil {
-		return fmt.Errorf("context canceled: %w", ctx.Err())
+func (fw *FixedWindow) WaitRequest(ctx context.Context, opts ...RequestOption) error {
+	options := createOptions(opts)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context canceled on arrival: %w", err)
 	}
-	select {
-	case <-time.After(fw.timeUntilMakeRequest()):
+	for {
+		fw.mu.Lock()
 		fw.checkAndDoReset()
-		if fw.limitReached() {
-			// hopefully this will never trigger because the count has just been reset
-			// but theoretically it would happen such that enough other things made requests
-			return fmt.Errorf("limit: %d has been reached for this window", fw.MaxRequests)
+		if options.throttleLimit != nil {
+			if fw.count < *options.throttleLimit && !fw.limitReached() {
+				fw.count++
+				fw.mu.Unlock()
+				return nil
+			}
+		} else {
+			if !fw.limitReached() {
+				fw.count++
+				fw.mu.Unlock()
+				return nil
+			}
 		}
-		fw.count++
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("context canceled: %w", ctx.Err())
+		waitTime := time.Until(fw.resetAt)
+		fw.mu.Unlock()
+		select {
+		case <-time.After(waitTime):
+			continue
+		case <-ctx.Done():
+			return fmt.Errorf("context canceled: %w", ctx.Err())
+		}
 	}
 }

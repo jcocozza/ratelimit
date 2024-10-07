@@ -26,7 +26,7 @@ import (
 
 const (
 	ReadLimitShort         = 300.0
-	ReadLimitShortDuration = time.Duration(1 * time.Second)
+	ReadLimitShortDuration = time.Duration(500 * time.Millisecond)
 	ReadLimitLong          = 3000.0
 	ReadLimitLongDuration  = time.Duration(20 * time.Second)
 )
@@ -57,6 +57,7 @@ func (s *service) Backfill() error {
 }
 
 func (s *service) checkRateLimits(ctx context.Context) error {
+	fmt.Println("checking rates...")
 	err := s.limLong.WaitRequest(ctx)
 	if err != nil {
 		return fmt.Errorf("failed long rate limits, %w", err)
@@ -66,7 +67,6 @@ func (s *service) checkRateLimits(ctx context.Context) error {
 		return fmt.Errorf("failed short rate limits, %w", err)
 	}
 	return nil
-
 }
 
 func (s *service) RemainingRequests() (int, int) {
@@ -85,22 +85,22 @@ func (s *service) deepBackfillRunner() {
 		for {
 			select {
 			case deepfillObj, ok := <-s.deepUUIDBackfill:
+				fmt.Println("current processing: ", deepfillObj)
 				if !ok {
 					return
 				}
 				for {
 					min15Remaining, dailyRemaining := s.RemainingRequests()
-					fmt.Printf("deep fill tokens remaining, short: %d, long: %d\n", min15Remaining, dailyRemaining)
 					if dailyRemaining > dailyBackfillThreshold && min15Remaining > min15BackfillThreshold {
+						fmt.Printf("processing allowed: short: %d, long: %d\n", min15Remaining, dailyRemaining)
 						ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-						fmt.Println("processsing ", deepfillObj)
 						err := s.checkRateLimits(ctx)
 						if err != nil {
 							fmt.Println("error: " + err.Error())
 						}
 						cancel()
 						break
-					} else if dailyRemaining < dailyBackfillThreshold {
+					} else if dailyRemaining <= dailyBackfillThreshold {
 						// if we exceeded the daily limit then just go to sleep till the next day
 						// no point in doing lots of checks...
 						timeTillNextDay := s.limLong.TimeTillNextWindow()
